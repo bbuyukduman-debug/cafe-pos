@@ -9,14 +9,32 @@ import { initializeApp, getApps, getApp } from 'firebase/app';
 import { getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, collection, doc, setDoc, onSnapshot } from 'firebase/firestore';
 
+// --- KRİTİK YAPILANDIRMA: Kendi Firebase bilgilerinizi buraya giriniz ---
+// Firebase Konsolu > Proje Ayarları > Web App kısmından bu bilgileri alabilirsiniz.
+const firebaseConfig = {
+  apiKey: "AIzaSyCa_Rc0476-6E1La4J1XoopNU3bYzeJV1M",
+  authDomain: "my-cafe-f8ee7.firebaseapp.com",
+  projectId: "my-cafe-f8ee7",
+  storageBucket: "my-cafe-f8ee7.firebasestorage.app",
+  messagingSenderId: "408851040899",
+  appId: "1:408851040899:web:a9378e8345356cbf3129b6",
+  measurementId: "G-E5KRT2E8B2"
+};
+
 // --- GÜVENLİ FİREBASE BAŞLATMA PROTOKOLÜ ---
 const getFirebaseInstance = () => {
   try {
-    const config = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
+    // Önce sistem tarafından sağlanan (eğer varsa) yapılandırmayı kontrol et
+    let config = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
     
-    // Geçerli bir API Key yoksa Firebase'i başlatma, uygulamayı kırma
-    if (!config || !config.apiKey) {
-      console.warn("Firebase yapılandırması eksik. Uygulama yerel modda çalışıyor.");
+    // Eğer sistem yapılandırması yoksa veya geçersizse, yukarıdaki manuel yapılandırmayı kullan
+    if (!config || !config.apiKey || config.apiKey === "") {
+      config = MY_CUSTOM_CONFIG;
+    }
+
+    // Hala geçerli bir API Key yoksa yerel modda kal
+    if (!config || !config.apiKey || config.apiKey.includes("BURAYA")) {
+      console.warn("Firebase yapılandırması eksik veya varsayılan değerde. Uygulama yerel modda çalışıyor.");
       return { app: null, auth: null, db: null };
     }
 
@@ -88,6 +106,7 @@ export default function App() {
   // Veri Senkronizasyonu
   useEffect(() => {
     if (!db || !user) return;
+    // Not: Artifact yolu, paylaşılan ortamda senkronizasyon sağlar.
     const tablesRef = collection(db, 'artifacts', appId, 'public', 'data', 'tables');
     const unsubscribe = onSnapshot(tablesRef, (snapshot) => {
       if (snapshot.empty) {
@@ -131,7 +150,7 @@ export default function App() {
       const tableRef = doc(db, 'artifacts', appId, 'public', 'data', 'tables', activeTableId);
       await setDoc(tableRef, { ...currentTable, orders: newOrders, status: 'occupied' });
     } else {
-      // Çevrimdışı/Yerel Mod Desteği
+      // Yerel Mod: Firebase bağlantısı yoksa sadece arayüzü güncelle
       setTables(prev => prev.map(t => t.id === activeTableId ? { ...t, orders: newOrders, status: 'occupied' } : t));
     }
   };
@@ -182,7 +201,7 @@ export default function App() {
           <div>
             <h1 className="text-3xl md:text-5xl font-black text-slate-800 tracking-tight">Salon Yönetimi</h1>
             <p className="text-slate-500 font-bold mt-1">
-              {!auth ? "⚠️ Yerel Mod (Firebase Bağlı Değil)" : "Gerçek zamanlı masa takibi"}
+              {!db ? "⚠️ Yerel Mod (Bulut Bağlantısı Yok)" : "✅ Bulut Senkronizasyonu Aktif"}
             </p>
           </div>
           <div className="flex items-center gap-3 bg-white px-6 py-3 rounded-full shadow-md border border-slate-200">
