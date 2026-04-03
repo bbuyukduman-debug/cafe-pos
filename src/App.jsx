@@ -10,15 +10,14 @@ import { getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged }
 import { getFirestore, collection, doc, setDoc, onSnapshot } from 'firebase/firestore';
 
 // --- KRİTİK YAPILANDIRMA: Kendi Firebase bilgilerinizi buraya giriniz ---
-// Firebase Konsolu > Proje Ayarları > Web App kısmından bu bilgileri alabilirsiniz.
-const firebaseConfig = {
+// Firebase Konsolu (console.firebase.google.com) > Proje Ayarları > Web App kısmından bu bilgileri alabilirsiniz.
+const MY_CUSTOM_CONFIG = {
   apiKey: "AIzaSyCa_Rc0476-6E1La4J1XoopNU3bYzeJV1M",
   authDomain: "my-cafe-f8ee7.firebaseapp.com",
   projectId: "my-cafe-f8ee7",
   storageBucket: "my-cafe-f8ee7.firebasestorage.app",
   messagingSenderId: "408851040899",
-  appId: "1:408851040899:web:a9378e8345356cbf3129b6",
-  measurementId: "G-E5KRT2E8B2"
+  appId: "1:408851040899:web:a9378e8345356cbf3129b6"
 };
 
 // --- GÜVENLİ FİREBASE BAŞLATMA PROTOKOLÜ ---
@@ -32,9 +31,9 @@ const getFirebaseInstance = () => {
       config = MY_CUSTOM_CONFIG;
     }
 
-    // Hala geçerli bir API Key yoksa yerel modda kal
+    // Hala geçerli bir API Key yoksa veya "BURAYA" kelimesini içeriyorsa yerel modda kal
     if (!config || !config.apiKey || config.apiKey.includes("BURAYA")) {
-      console.warn("Firebase yapılandırması eksik veya varsayılan değerde. Uygulama yerel modda çalışıyor.");
+      console.warn("Firebase yapılandırması eksik. Uygulama yerel modda çalışıyor.");
       return { app: null, auth: null, db: null };
     }
 
@@ -106,7 +105,6 @@ export default function App() {
   // Veri Senkronizasyonu
   useEffect(() => {
     if (!db || !user) return;
-    // Not: Artifact yolu, paylaşılan ortamda senkronizasyon sağlar.
     const tablesRef = collection(db, 'artifacts', appId, 'public', 'data', 'tables');
     const unsubscribe = onSnapshot(tablesRef, (snapshot) => {
       if (snapshot.empty) {
@@ -150,7 +148,6 @@ export default function App() {
       const tableRef = doc(db, 'artifacts', appId, 'public', 'data', 'tables', activeTableId);
       await setDoc(tableRef, { ...currentTable, orders: newOrders, status: 'occupied' });
     } else {
-      // Yerel Mod: Firebase bağlantısı yoksa sadece arayüzü güncelle
       setTables(prev => prev.map(t => t.id === activeTableId ? { ...t, orders: newOrders, status: 'occupied' } : t));
     }
   };
