@@ -1,6 +1,7 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
+import path from 'path'
 
 // https://vite.dev/config/
 export default defineConfig({
@@ -8,7 +9,6 @@ export default defineConfig({
     react(),
     VitePWA({ 
       registerType: 'autoUpdate',
-      // Çevrimdışı önbelleğe alınacak statik varlıklar
       includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'maskable-icon.png'],
       manifest: {
         name: 'Cafe Adisyon POS Sistemi',
@@ -33,16 +33,26 @@ export default defineConfig({
         ]
       },
       workbox: {
-        // Derleme hatasını önlemek için: 
-        // Eğer ikonlar henüz mevcut değilse build işleminin çökmesini engeller.
         globPatterns: ['**/*.{js,css,html,ico,png,svg}'],
         cleanupOutdatedCaches: true,
         clientsClaim: true,
         skipWaiting: true
       },
       devOptions: {
-        enabled: true // Geliştirme ortamında PWA özelliklerini test etmek için
+        enabled: true
       }
     })
   ],
+  resolve: {
+    alias: {
+      // Rolldown derleyicisinin lucide-react paketini bulmasını kolaylaştırır
+      'lucide-react': path.resolve(__dirname, 'node_modules/lucide-react')
+    }
+  },
+  build: {
+    // Paketleme esnasında kütüphanelerin doğru şekilde dahil edildiğinden emin olur
+    commonjsOptions: {
+      include: [/lucide-react/, /node_modules/]
+    }
+  }
 })
