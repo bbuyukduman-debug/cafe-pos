@@ -23,28 +23,13 @@ const firebaseConfig = {
   measurementId: "G-E5KRT2E8B2"
 };
 
-// Firebase Servislerinin Başlatılması
 const getFirebase = () => {
   try {
     const config = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : firebaseConfig;
-    
-    // Güvenlik Kontrolü: Eğer anahtar girilmemişse veya yer tutucu metin duruyorsa
-    const isUnconfigured = !config.apiKey || 
-                           config.apiKey === "" || 
-                           config.apiKey.includes("GELECEK") || 
-                           config.apiKey.includes("SİZİN");
-
-    if (isUnconfigured) {
-      return { app: null, auth: null, db: null, isConfigured: false };
-    }
-
+    const isUnconfigured = !config.apiKey || config.apiKey === "" || config.apiKey.includes("GELECEK") || config.apiKey.includes("SİZİN");
+    if (isUnconfigured) return { app: null, auth: null, db: null, isConfigured: false };
     const app = getApps().length > 0 ? getApp() : initializeApp(config);
-    return { 
-      app, 
-      auth: getAuth(app), 
-      db: getFirestore(app), 
-      isConfigured: true 
-    };
+    return { app, auth: getAuth(app), db: getFirestore(app), isConfigured: true };
   } catch (e) {
     console.error("Firebase başlatma hatası:", e);
     return { app: null, auth: null, db: null, isConfigured: false };
@@ -54,7 +39,6 @@ const getFirebase = () => {
 const { auth, db, isConfigured } = getFirebase();
 const appId = typeof __app_id !== 'undefined' ? __app_id : 'anil-cafe-v1-prod';
 
-// --- STATİK VERİ SETLERİ ---
 const CATEGORIES = [
   { id: 'sicak', name: 'Sıcak İçecekler', icon: <Coffee size={24} /> },
   { id: 'soguk', name: 'Soğuk İçecekler', icon: <CupSoda size={24} /> },
@@ -92,16 +76,23 @@ export default function App() {
   const [deferredPrompt, setDeferredPrompt] = useState(null);
   const [showInstallBtn, setShowInstallBtn] = useState(false);
 
-  // 1. Kimlik Doğrulama ve PWA Listener
   useEffect(() => {
-    // PWA Kurulum Yakalayıcı
+    // PWA Kurulum Yakalayıcı (Debug Log eklendi)
     const handleBeforeInstallPrompt = (e) => {
+      console.log('✅ PWA: Kurulum için hazır sinyali alındı.');
       e.preventDefault();
       setDeferredPrompt(e);
       setShowInstallBtn(true);
     };
 
+    const handleAppInstalled = () => {
+      console.log('🚀 PWA: Uygulama başarıyla kuruldu.');
+      setShowInstallBtn(false);
+      setDeferredPrompt(null);
+    };
+
     window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    window.addEventListener('appinstalled', handleAppInstalled);
 
     if (!isConfigured) {
       setConnState('unconfigured');
@@ -127,15 +118,13 @@ export default function App() {
     return () => {
       unsubscribe();
       window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+      window.removeEventListener('appinstalled', handleAppInstalled);
     };
   }, []);
 
-  // 2. Senkronizasyon
   useEffect(() => {
     if (!user || !db) return;
-
     const tablesRef = collection(db, 'artifacts', appId, 'public', 'data', 'tables');
-    
     const unsubscribe = onSnapshot(tablesRef, (snapshot) => {
       if (!snapshot.empty) {
         const dbData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
@@ -149,7 +138,6 @@ export default function App() {
       console.error("Firestore Error:", err);
       if (err.code === 'permission-denied') setConnState('permission-error');
     });
-
     return () => unsubscribe();
   }, [user]);
 
@@ -160,6 +148,7 @@ export default function App() {
     if (!deferredPrompt) return;
     deferredPrompt.prompt();
     const { outcome } = await deferredPrompt.userChoice;
+    console.log(`👤 PWA Kurulum Tercihi: ${outcome}`);
     if (outcome === 'accepted') {
       setShowInstallBtn(false);
     }
@@ -170,7 +159,6 @@ export default function App() {
     if (!user || !db) return;
     const currentTable = tables.find(t => t.id === activeTableId);
     if (!currentTable) return;
-
     const newOrders = [...currentTable.orders];
     const idx = newOrders.findIndex(o => o.productId === product.id);
     if (idx >= 0) {
@@ -178,7 +166,6 @@ export default function App() {
     } else {
       newOrders.push({ productId: product.id, name: product.name, price: product.price, quantity: 1, time: new Date().toLocaleTimeString('tr-TR') });
     }
-
     const tableRef = doc(db, 'artifacts', appId, 'public', 'data', 'tables', activeTableId);
     await setDoc(tableRef, { ...currentTable, orders: newOrders, status: 'occupied' });
   };
@@ -187,17 +174,14 @@ export default function App() {
     if (!user || !db) return;
     const currentTable = tables.find(t => t.id === activeTableId);
     if (!currentTable) return;
-
     let newOrders = [...currentTable.orders];
     const idx = newOrders.findIndex(o => o.productId === productId);
     if (idx === -1) return;
-
     if (newOrders[idx].quantity > 1) {
       newOrders[idx] = { ...newOrders[idx], quantity: newOrders[idx].quantity - 1 };
     } else {
       newOrders.splice(idx, 1);
     }
-
     const status = newOrders.length === 0 ? 'empty' : 'occupied';
     const tableRef = doc(db, 'artifacts', appId, 'public', 'data', 'tables', activeTableId);
     await setDoc(tableRef, { ...currentTable, orders: newOrders, status });
@@ -212,10 +196,8 @@ export default function App() {
           <div className="w-20 h-20 bg-amber-500/20 rounded-3xl flex items-center justify-center mx-auto mb-8 text-amber-500 border border-amber-500/30">
             <Key size={40} />
           </div>
-          <h1 className="text-3xl font-black mb-4 tracking-tight leading-tight">Konfigürasyon Gerekli</h1>
-          <p className="text-slate-400 font-bold mb-8 leading-relaxed">
-            Lütfen <code className="bg-slate-950 px-2 py-1 rounded text-amber-400">App.jsx</code> dosyasındaki <code className="text-white">firebaseConfig</code> alanına kendi Firebase anahtarlarınızı girin.
-          </p>
+          <h1 className="text-3xl font-black mb-4 tracking-tight">Konfigürasyon Gerekli</h1>
+          <p className="text-slate-400 font-bold mb-8 leading-relaxed">Lütfen <code className="bg-slate-950 px-2 py-1 rounded text-amber-400">App.jsx</code> dosyasındaki <code className="text-white">firebaseConfig</code> alanına kendi Firebase anahtarlarınızı girin.</p>
         </div>
       </div>
     );
@@ -240,7 +222,7 @@ export default function App() {
               {showInstallBtn && (
                 <button 
                   onClick={handleInstallClick}
-                  className="bg-indigo-600 text-white px-4 py-1.5 rounded-full text-xs font-black flex items-center gap-2 hover:bg-indigo-700 transition shadow-lg shadow-indigo-600/20"
+                  className="bg-indigo-600 text-white px-5 py-1.5 rounded-full text-xs font-black flex items-center gap-2 hover:bg-indigo-700 transition shadow-lg shadow-indigo-600/30 animate-bounce"
                 >
                   <MonitorSmartphone size={14} /> UYGULAMAYI KUR
                 </button>
@@ -248,13 +230,8 @@ export default function App() {
             </div>
           </div>
           <div className="bg-white px-6 py-4 rounded-3xl shadow-md border border-slate-100 flex items-center gap-4">
-            <div className="w-10 h-10 bg-indigo-50 rounded-2xl flex items-center justify-center text-indigo-600">
-              <User size={20} />
-            </div>
-            <div>
-              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Garson</p>
-              <p className="text-sm font-bold text-slate-700">Ahmet Yılmaz</p>
-            </div>
+            <User size={20} className="text-indigo-600" />
+            <span className="text-sm font-bold text-slate-700">Garson Modu</span>
           </div>
         </header>
 
@@ -299,7 +276,7 @@ export default function App() {
           <button onClick={() => setActiveTableId(null)} className="p-4 bg-slate-50 rounded-2xl hover:bg-slate-200 transition text-slate-400 hover:text-slate-900">
             <ArrowLeft size={28} />
           </button>
-          <h2 className="text-3xl font-black text-slate-800 tracking-tight leading-none">{activeTable.name}</h2>
+          <h2 className="text-3xl font-black text-slate-800 tracking-tight">{activeTable.name}</h2>
         </header>
         
         <div className="bg-white border-b border-slate-200 p-4 overflow-x-auto scrollbar-hide">
@@ -326,9 +303,7 @@ export default function App() {
 
       <div className="w-full lg:w-[450px] bg-white flex flex-col h-[45vh] lg:h-screen border-l border-slate-200 shadow-2xl relative z-20">
         <div className="p-8 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
-          <h3 className="font-black text-slate-800 flex items-center gap-3 text-2xl tracking-tight">
-            <Receipt size={28} className="text-indigo-600" /> ADİSYON
-          </h3>
+          <h3 className="font-black text-slate-800 flex items-center gap-3 text-2xl tracking-tight"><Receipt size={28} className="text-indigo-600" /> ADİSYON</h3>
           <span className="bg-slate-900 text-white px-5 py-2 rounded-2xl text-xs font-black shadow-lg">{activeTable.orders.length} KALEM</span>
         </div>
 
@@ -352,7 +327,7 @@ export default function App() {
           ))}
         </div>
 
-        <div className="p-10 border-t border-slate-200 bg-white">
+        <div className="p-10 border-t border-slate-200 bg-white shadow-[0_-10px_40px_-15px_rgba(0,0,0,0.1)]">
           <div className="flex justify-between items-end mb-8">
             <span className="text-slate-400 font-black text-xs uppercase tracking-[0.3em]">Genel Toplam</span>
             <span className="text-6xl font-black text-slate-900 tracking-tighter">₺{calculateTotal(activeTable.orders).toFixed(2)}</span>
