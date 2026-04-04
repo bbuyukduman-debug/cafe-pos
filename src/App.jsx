@@ -3,7 +3,7 @@ import {
   Coffee, Pizza, Cake, CupSoda, 
   Plus, Minus, Trash2, ArrowLeft, 
   CheckCircle, User, Clock, Utensils,
-  Receipt, Download, Wifi, WifiOff, AlertTriangle, Key
+  Receipt, Download, Wifi, WifiOff, AlertTriangle, Key, MonitorSmartphone
 } from 'lucide-react';
 import { initializeApp, getApps, getApp } from 'firebase/app';
 import { getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
@@ -87,9 +87,22 @@ export default function App() {
   const [activeTableId, setActiveTableId] = useState(null);
   const [activeCategory, setActiveCategory] = useState('sicak');
   const [connState, setConnState] = useState('checking'); 
+  
+  // PWA Kurulum Durum Yönetimi
+  const [deferredPrompt, setDeferredPrompt] = useState(null);
+  const [showInstallBtn, setShowInstallBtn] = useState(false);
 
-  // 1. Kimlik Doğrulama
+  // 1. Kimlik Doğrulama ve PWA Listener
   useEffect(() => {
+    // PWA Kurulum Yakalayıcı
+    const handleBeforeInstallPrompt = (e) => {
+      e.preventDefault();
+      setDeferredPrompt(e);
+      setShowInstallBtn(true);
+    };
+
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+
     if (!isConfigured) {
       setConnState('unconfigured');
       return;
@@ -110,7 +123,11 @@ export default function App() {
 
     initAuth();
     const unsubscribe = onAuthStateChanged(auth, setUser);
-    return () => unsubscribe();
+    
+    return () => {
+      unsubscribe();
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    };
   }, []);
 
   // 2. Senkronizasyon
@@ -138,6 +155,16 @@ export default function App() {
 
   const activeTable = useMemo(() => tables.find(t => t.id === activeTableId), [tables, activeTableId]);
   const filteredProducts = useMemo(() => PRODUCTS.filter(p => p.category === activeCategory), [activeCategory]);
+
+  const handleInstallClick = async () => {
+    if (!deferredPrompt) return;
+    deferredPrompt.prompt();
+    const { outcome } = await deferredPrompt.userChoice;
+    if (outcome === 'accepted') {
+      setShowInstallBtn(false);
+    }
+    setDeferredPrompt(null);
+  };
 
   const handleAddProduct = async (product) => {
     if (!user || !db) return;
@@ -178,8 +205,6 @@ export default function App() {
 
   const calculateTotal = (orders) => orders.reduce((acc, curr) => acc + (curr.price * curr.quantity), 0);
 
-  // --- RENDER DÖNGÜSÜ ---
-
   if (connState === 'unconfigured') {
     return (
       <div className="min-h-screen bg-slate-900 flex items-center justify-center p-6 text-white font-sans">
@@ -187,13 +212,10 @@ export default function App() {
           <div className="w-20 h-20 bg-amber-500/20 rounded-3xl flex items-center justify-center mx-auto mb-8 text-amber-500 border border-amber-500/30">
             <Key size={40} />
           </div>
-          <h1 className="text-3xl font-black mb-4 tracking-tight">Konfigürasyon Gerekli</h1>
+          <h1 className="text-3xl font-black mb-4 tracking-tight leading-tight">Konfigürasyon Gerekli</h1>
           <p className="text-slate-400 font-bold mb-8 leading-relaxed">
-            Lütfen <code className="bg-slate-950 px-2 py-1 rounded text-amber-400">App.jsx</code> dosyasındaki <code className="text-white">firebaseConfig</code> alanına gerçek anahtarlarınızı yapıştırın.
+            Lütfen <code className="bg-slate-950 px-2 py-1 rounded text-amber-400">App.jsx</code> dosyasındaki <code className="text-white">firebaseConfig</code> alanına kendi Firebase anahtarlarınızı girin.
           </p>
-          <div className="bg-slate-950 p-4 rounded-2xl text-left text-sm font-mono border border-slate-700">
-            apiKey: "AIzaSy..."
-          </div>
         </div>
       </div>
     );
@@ -215,11 +237,24 @@ export default function App() {
                   <div className="w-2 h-2 bg-amber-400 rounded-full animate-ping" /> BAĞLANTI KURULUYOR...
                 </span>
               )}
+              {showInstallBtn && (
+                <button 
+                  onClick={handleInstallClick}
+                  className="bg-indigo-600 text-white px-4 py-1.5 rounded-full text-xs font-black flex items-center gap-2 hover:bg-indigo-700 transition shadow-lg shadow-indigo-600/20"
+                >
+                  <MonitorSmartphone size={14} /> UYGULAMAYI KUR
+                </button>
+              )}
             </div>
           </div>
           <div className="bg-white px-6 py-4 rounded-3xl shadow-md border border-slate-100 flex items-center gap-4">
-            <User size={20} className="text-indigo-600" />
-            <span className="text-sm font-bold text-slate-700">Garson Modu</span>
+            <div className="w-10 h-10 bg-indigo-50 rounded-2xl flex items-center justify-center text-indigo-600">
+              <User size={20} />
+            </div>
+            <div>
+              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Garson</p>
+              <p className="text-sm font-bold text-slate-700">Ahmet Yılmaz</p>
+            </div>
           </div>
         </header>
 
@@ -264,7 +299,7 @@ export default function App() {
           <button onClick={() => setActiveTableId(null)} className="p-4 bg-slate-50 rounded-2xl hover:bg-slate-200 transition text-slate-400 hover:text-slate-900">
             <ArrowLeft size={28} />
           </button>
-          <h2 className="text-3xl font-black text-slate-800 tracking-tight">{activeTable.name}</h2>
+          <h2 className="text-3xl font-black text-slate-800 tracking-tight leading-none">{activeTable.name}</h2>
         </header>
         
         <div className="bg-white border-b border-slate-200 p-4 overflow-x-auto scrollbar-hide">
@@ -291,7 +326,9 @@ export default function App() {
 
       <div className="w-full lg:w-[450px] bg-white flex flex-col h-[45vh] lg:h-screen border-l border-slate-200 shadow-2xl relative z-20">
         <div className="p-8 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
-          <h3 className="font-black text-slate-800 flex items-center gap-3 text-2xl tracking-tight"><Receipt size={28} className="text-indigo-600" /> ADİSYON</h3>
+          <h3 className="font-black text-slate-800 flex items-center gap-3 text-2xl tracking-tight">
+            <Receipt size={28} className="text-indigo-600" /> ADİSYON
+          </h3>
           <span className="bg-slate-900 text-white px-5 py-2 rounded-2xl text-xs font-black shadow-lg">{activeTable.orders.length} KALEM</span>
         </div>
 
@@ -305,7 +342,8 @@ export default function App() {
               <div className="flex items-center justify-between">
                 <span className="text-xs text-slate-400 font-black tracking-widest">₺{order.price} x {order.quantity}</span>
                 <div className="flex items-center gap-3 bg-white rounded-2xl p-2 shadow-inner border border-slate-200">
-                  <button onClick={() => handleRemoveProduct(order.productId)} className="p-3 text-red-500 hover:bg-red-50 rounded-xl transition">{order.quantity === 1 ? <Trash2 size={20} /> : <Minus size={20} />}</button>
+                  <button onClick={() => handleRemoveProduct(order.productId)} className="p-3 text-red-500 hover:bg-red-50 rounded-xl transition">{order.quantity === 1 ? <Trash2 size={20} /> : <Minus size={20} />}
+                  </button>
                   <span className="w-8 text-center font-black text-slate-800 text-xl">{order.quantity}</span>
                   <button onClick={() => handleAddProduct({id: order.productId, name: order.name, price: order.price})} className="p-3 text-emerald-600 hover:bg-emerald-50 rounded-xl transition"><Plus size={20} /></button>
                 </div>
