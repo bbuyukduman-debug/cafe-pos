@@ -3,15 +3,15 @@ import {
   Coffee, Pizza, Cake, CupSoda, 
   Plus, Minus, Trash2, ArrowLeft, 
   CheckCircle, User, Clock, Utensils,
-  Receipt, Download, Wifi, WifiOff
+  Receipt, Download, Wifi, WifiOff, AlertTriangle
 } from 'lucide-react';
 import { initializeApp, getApps, getApp } from 'firebase/app';
 import { getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
-import { getFirestore, collection, doc, setDoc, onSnapshot, getDoc } from 'firebase/firestore';
+import { getFirestore, collection, doc, setDoc, onSnapshot } from 'firebase/firestore';
 
 // --- FİREBASE YAPILANDIRMASI ---
-// ÖNEMLİ: Eğer kendi Firebase projenizi kullanıyorsanız, Firebase Konsolu > Rules kısmından 
-// okuma/yazma izinlerini herkese açtığınızdan (allow read, write: if true;) emin olun.
+// ÖNEMLİ: Kendi Firebase projenizi kullanıyorsanız bu bilgileri doldurun.
+// Preview ortamında sistem kendi yapılandırmasını otomatik olarak enjekte eder.
 const MY_CUSTOM_CONFIG = {
   apiKey: "AIzaSyCa_Rc0476-6E1La4J1XoopNU3bYzeJV1M",
   authDomain: "my-cafe-f8ee7.firebaseapp.com",
@@ -21,14 +21,19 @@ const MY_CUSTOM_CONFIG = {
   appId: "1:408851040899:web:a9378e8345356cbf3129b6"
 };
 
-// Ortam değişkenlerini veya özel yapılandırmayı kullan
-const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : MY_CUSTOM_CONFIG;
+// Ortam değişkenlerini veya özel yapılandırmayı güvenli bir şekilde alıyoruz
+const firebaseConfig = typeof __firebase_config !== 'undefined' && __firebase_config 
+  ? JSON.parse(__firebase_config) 
+  : MY_CUSTOM_CONFIG;
+
 const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
-// Senkronizasyon için appId (Zorunlu yol yapısı için gereklidir)
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'anil-cafe-pos-v1';
+// KRİTİK: Firestore izin hatasını (permission-denied) önlemek için 
+// sistem tarafından sağlanan appId'yi kullanmalıyız. 
+// Eğer preview ortamındaysak __app_id kullanılır, değilse sabit bir değer kullanılır.
+const currentAppId = typeof __app_id !== 'undefined' ? __app_id : 'anil-cafe-v1-prod'; 
 
 // --- VERİ SETLERİ ---
 const CATEGORIES = [
@@ -62,74 +67,78 @@ export default function App() {
   const [tables, setTables] = useState(INITIAL_TABLES);
   const [activeTableId, setActiveTableId] = useState(null);
   const [activeCategory, setActiveCategory] = useState('sicak');
-  const [isSyncing, setIsSyncing] = useState(false);
-  const [authReady, setAuthReady] = useState(false);
+  const [connectionStatus, setConnectionStatus] = useState('initializing');
+  const [errorMessage, setErrorMessage] = useState("");
 
-  // 1. Kimlik Doğrulama Süreci (Kritik: Firestore'dan önce tamamlanmalı)
+  // 1. Kimlik Doğrulama (Auth Before Queries)
   useEffect(() => {
     const initAuth = async () => {
+      setConnectionStatus('authenticating');
       try {
         if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
           await signInWithCustomToken(auth, __initial_auth_token);
         } else {
           await signInAnonymously(auth);
         }
-        console.log("Kimlik doğrulama başarılı.");
       } catch (error) {
-        console.error("Kimlik doğrulama hatası:", error);
-      } finally {
-        setAuthReady(true);
+        console.error("Auth Hatası:", error);
+        setConnectionStatus('error');
+        setErrorMessage("Kimlik doğrulama başarısız. Firebase ayarlarını kontrol edin.");
       }
     };
 
     initAuth();
     const unsubscribe = onAuthStateChanged(auth, (u) => {
       setUser(u);
+      if (u) {
+        setConnectionStatus('syncing');
+      }
     });
     return () => unsubscribe();
   }, []);
 
-  // 2. Veritabanı Dinleme (Sadece kullanıcı oturum açtıktan sonra başlar)
+  // 2. Veritabanı Senkronizasyonu (Strict Paths & Success/Error Callbacks)
   useEffect(() => {
-    // pattern rule 3: Auth tamamlanmadan ve user nesnesi oluşmadan sorgu yapma
-    if (!authReady || !user) return;
+    // Auth tamamlanmadan ve kullanıcı objesi oluşmadan sorgu başlatmıyoruz (Pattern Rule 3)
+    if (!user) return;
 
-    // pattern rule 1: /artifacts/{appId}/public/data/{collectionName} yolunu kullan
-    const tablesCollection = collection(db, 'artifacts', appId, 'public', 'data', 'tables');
+    // Kural: /artifacts/{appId}/public/data/{collectionName}
+    const tablesCollection = collection(db, 'artifacts', currentAppId, 'public', 'data', 'tables');
     
-    setIsSyncing(true);
     const unsubscribe = onSnapshot(tablesCollection, 
       (snapshot) => {
         if (snapshot.empty) {
           setTables(INITIAL_TABLES);
         } else {
           const dbData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-          // pattern rule 2: Manuel sıralama ve eşleştirme (JS tarafında)
+          // Manuel eşleştirme (Pattern Rule 2)
           setTables(INITIAL_TABLES.map(initialTable => {
             const match = dbData.find(d => d.id === initialTable.id);
             return match || initialTable;
           }));
         }
-        setIsSyncing(false);
+        setConnectionStatus('connected');
+        setErrorMessage("");
       }, 
       (error) => {
-        console.error("Firestore Dinleme Hatası:", error);
-        setIsSyncing(false);
-        // Hata durumunda kullanıcıyı bilgilendirmek için konsola detay yazdır
+        console.error("Firestore Listen Error:", error);
+        setConnectionStatus('error');
         if (error.code === 'permission-denied') {
-          console.error("YETERSİZ YETKİ: Lütfen Firebase Console üzerinden Rules (Kurallar) kısmını kontrol edin.");
+          setErrorMessage("Erişim Reddedildi: Veritabanı izinleri veya dosya yolları uyumsuz.");
+        } else {
+          setErrorMessage("Bulut bağlantısı sırasında bir hata oluştu.");
         }
       }
     );
 
     return () => unsubscribe();
-  }, [user, authReady]);
+  }, [user]);
 
   const activeTable = useMemo(() => tables.find(t => t.id === activeTableId), [tables, activeTableId]);
   const filteredProducts = useMemo(() => PRODUCTS.filter(p => p.category === activeCategory), [activeCategory]);
 
   const handleAddProduct = async (product) => {
-    if (!user) return;
+    if (!user || !activeTableId) return;
     const currentTable = tables.find(t => t.id === activeTableId);
     if (!currentTable) return;
 
@@ -148,22 +157,22 @@ export default function App() {
       });
     }
 
-    const tableRef = doc(db, 'artifacts', appId, 'public', 'data', 'tables', activeTableId);
+    const tableRef = doc(db, 'artifacts', currentAppId, 'public', 'data', 'tables', activeTableId);
     try {
       await setDoc(tableRef, {
         id: activeTableId,
         name: currentTable.name,
         orders: newOrders,
         status: 'occupied',
-        updatedAt: new Date().getTime()
+        lastUpdate: new Date().getTime()
       });
     } catch (err) {
-      console.error("Ürün ekleme hatası:", err);
+      console.error("Yazma Hatası:", err);
     }
   };
 
   const handleRemoveProduct = async (productId) => {
-    if (!user) return;
+    if (!user || !activeTableId) return;
     const currentTable = tables.find(t => t.id === activeTableId);
     if (!currentTable) return;
 
@@ -178,7 +187,7 @@ export default function App() {
     }
 
     const newStatus = newOrders.length === 0 ? 'empty' : 'occupied';
-    const tableRef = doc(db, 'artifacts', appId, 'public', 'data', 'tables', activeTableId);
+    const tableRef = doc(db, 'artifacts', currentAppId, 'public', 'data', 'tables', activeTableId);
     
     try {
       await setDoc(tableRef, {
@@ -186,63 +195,69 @@ export default function App() {
         name: currentTable.name,
         orders: newOrders,
         status: newStatus,
-        updatedAt: new Date().getTime()
+        lastUpdate: new Date().getTime()
       });
     } catch (err) {
-      console.error("Ürün silme hatası:", err);
+      console.error("Silme Hatası:", err);
     }
   };
 
   const handleCheckout = async () => {
     if (!user || !activeTable) return;
-    if (window.confirm(`${activeTable.name} hesabı kapatılacak ve masa boşaltılacak. Onaylıyor musunuz?`)) {
-      const tableRef = doc(db, 'artifacts', appId, 'public', 'data', 'tables', activeTableId);
+    if (window.confirm(`${activeTable.name} hesabı kapatılacak ve masa boşaltılacak. Emin misiniz?`)) {
+      const tableRef = doc(db, 'artifacts', currentAppId, 'public', 'data', 'tables', activeTableId);
       try {
         await setDoc(tableRef, {
           id: activeTableId,
           name: activeTable.name,
           orders: [],
           status: 'empty',
-          updatedAt: new Date().getTime()
+          lastUpdate: new Date().getTime()
         });
         setActiveTableId(null);
       } catch (err) {
-        console.error("Tahsilat hatası:", err);
+        console.error("Kapatma Hatası:", err);
       }
     }
   };
 
   const calculateTotal = (orders) => orders.reduce((acc, curr) => acc + (curr.price * curr.quantity), 0);
 
-  // --- ARAYÜZ BİLEŞENLERİ ---
-
   if (!activeTableId) {
     return (
       <div className="min-h-screen bg-slate-50 p-4 md:p-8 font-sans text-slate-900">
-        <header className="mb-10 flex items-center justify-between">
+        <header className="mb-10 flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div>
             <h1 className="text-3xl md:text-5xl font-black text-slate-800 tracking-tight">Anıl Cafe POS</h1>
-            <div className="flex items-center gap-2 mt-2">
-              {user ? (
-                <span className="flex items-center gap-1.5 text-emerald-600 font-bold text-sm bg-emerald-50 px-3 py-1 rounded-full border border-emerald-100">
-                  <Wifi size={14} /> Bulut Senkronizasyonu Aktif
+            <div className="flex items-center gap-2 mt-3">
+              {connectionStatus === 'connected' ? (
+                <span className="flex items-center gap-1.5 text-emerald-600 font-bold text-sm bg-emerald-50 px-4 py-1.5 rounded-full border border-emerald-100 shadow-sm">
+                  <Wifi size={14} /> Senkronizasyon Hazır
+                </span>
+              ) : connectionStatus === 'error' ? (
+                <span className="flex items-center gap-1.5 text-red-600 font-bold text-sm bg-red-50 px-4 py-1.5 rounded-full border border-red-100 shadow-sm">
+                  <WifiOff size={14} /> Bağlantı Kesildi
                 </span>
               ) : (
-                <span className="flex items-center gap-1.5 text-amber-600 font-bold text-sm bg-amber-50 px-3 py-1 rounded-full border border-amber-100">
-                  <WifiOff size={14} /> Bağlantı Kuruluyor...
+                <span className="flex items-center gap-1.5 text-amber-600 font-bold text-sm bg-amber-50 px-4 py-1.5 rounded-full border border-amber-100 shadow-sm">
+                  <div className="w-2 h-2 bg-amber-400 rounded-full animate-ping" /> Bağlanıyor...
                 </span>
               )}
             </div>
           </div>
-          <div className="flex items-center gap-3 bg-white px-6 py-3 rounded-full shadow-md border border-slate-200">
+          <div className="flex items-center gap-3 bg-white px-6 py-3 rounded-2xl shadow-md border border-slate-100">
             <User size={22} className="text-indigo-600" />
             <span className="text-sm font-black text-slate-700">Garson: Ahmet</span>
           </div>
         </header>
 
-        {isSyncing && (
-          <div className="mb-6 text-center text-indigo-500 font-bold animate-pulse text-xs tracking-widest uppercase">
-            Veriler Güncelleniyor...
+        {connectionStatus === 'error' && (
+          <div className="mb-8 p-6 bg-red-50 border-2 border-red-100 rounded-3xl flex items-start gap-4">
+            <AlertTriangle className="text-red-500 shrink-0" size={28} />
+            <div>
+              <h3 className="font-black text-red-800 text-lg">Erişim Hatası</h3>
+              <p className="text-red-600 font-medium">{errorMessage}</p>
+            </div>
           </div>
         )}
 
@@ -254,11 +269,12 @@ export default function App() {
               <button 
                 key={table.id} 
                 onClick={() => setActiveTableId(table.id)} 
-                className={`flex flex-col p-8 rounded-[2.5rem] transition-all border-4 text-left h-52 shadow-sm relative overflow-hidden group ${
+                disabled={connectionStatus === 'initializing' || connectionStatus === 'authenticating'}
+                className={`flex flex-col p-8 rounded-[2.5rem] transition-all border-4 text-left h-52 shadow-sm relative overflow-hidden group active:scale-95 ${
                   isOccupied 
                   ? 'bg-white border-emerald-500 ring-8 ring-emerald-50' 
                   : 'bg-white border-slate-100 hover:border-slate-300 hover:translate-y-[-4px]'
-                }`}
+                } ${connectionStatus === 'error' ? 'opacity-80' : ''}`}
               >
                 <div className="flex justify-between w-full mb-auto items-center">
                   <span className={`text-2xl font-black ${isOccupied ? 'text-slate-800' : 'text-slate-300'}`}>{table.name}</span>
@@ -284,13 +300,9 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-100 flex flex-col lg:flex-row font-sans overflow-hidden text-slate-900">
-      {/* Sol Panel: Menü */}
       <div className="flex-1 flex flex-col h-[55vh] lg:h-screen">
         <header className="bg-white p-6 flex items-center gap-6 shadow-sm border-b border-slate-200">
-          <button 
-            onClick={() => setActiveTableId(null)} 
-            className="p-4 bg-slate-100 rounded-3xl hover:bg-slate-200 transition-colors shadow-inner"
-          >
+          <button onClick={() => setActiveTableId(null)} className="p-4 bg-slate-100 rounded-3xl hover:bg-slate-200 transition-colors shadow-inner">
             <ArrowLeft size={28} />
           </button>
           <div>
@@ -331,7 +343,6 @@ export default function App() {
         </div>
       </div>
 
-      {/* Sağ Panel: Adisyon */}
       <div className="w-full lg:w-[500px] bg-white flex flex-col h-[45vh] lg:h-screen border-l-4 border-slate-200 shadow-2xl relative z-30">
         <div className="p-8 bg-slate-50 border-b-2 border-slate-200 flex items-center justify-between">
           <h3 className="font-black text-slate-800 flex items-center gap-4 text-2xl">
@@ -344,7 +355,7 @@ export default function App() {
 
         <div className="flex-1 overflow-y-auto p-6 space-y-5">
           {activeTable?.orders.map(order => (
-            <div key={order.productId} className="flex flex-col p-6 bg-slate-50 rounded-[2rem] border-2 border-slate-100 shadow-sm">
+            <div key={order.productId} className="flex flex-col p-6 bg-slate-50 rounded-[2rem] border-2 border-slate-100 shadow-sm transition-transform hover:scale-[1.01]">
               <div className="flex justify-between font-black text-slate-800 mb-4 text-xl">
                 <span>{order.name}</span>
                 <span className="text-indigo-600">₺{(order.price * order.quantity).toFixed(2)}</span>
@@ -377,7 +388,7 @@ export default function App() {
           )}
         </div>
 
-        <div className="p-10 border-t-4 border-slate-100 bg-white">
+        <div className="p-10 border-t-4 border-slate-100 bg-white shadow-[0_-10px_40px_-15px_rgba(0,0,0,0.1)]">
           <div className="flex justify-between items-end mb-10">
             <span className="text-slate-400 font-black text-sm uppercase tracking-[0.3em]">Genel Toplam</span>
             <span className="text-6xl font-black text-slate-900 tracking-tighter">₺{calculateTotal(activeTable?.orders || []).toFixed(2)}</span>
@@ -391,7 +402,7 @@ export default function App() {
                 !activeTable?.orders || activeTable.orders.length === 0 ? 'bg-slate-100 text-slate-300' : 'bg-emerald-600 text-white hover:bg-emerald-700'
               }`}
             >
-              <CheckCircle size={24} /> TAHSİLAT
+              <CheckCircle size={24} /> ÖDEME AL
             </button>
           </div>
         </div>
@@ -399,7 +410,12 @@ export default function App() {
       
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap');
-        body { font-family: 'Inter', sans-serif; -webkit-tap-highlight-color: transparent; background-color: #f8fafc; overflow: hidden; }
+        body { 
+          font-family: 'Inter', sans-serif; 
+          -webkit-tap-highlight-color: transparent; 
+          background-color: #f8fafc;
+          overflow-x: hidden;
+        }
         .scrollbar-hide::-webkit-scrollbar { display: none; }
         .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
       `}</style>
