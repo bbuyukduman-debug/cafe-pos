@@ -10,11 +10,8 @@ import { getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged }
 import { getFirestore, collection, doc, setDoc, onSnapshot } from 'firebase/firestore';
 
 /**
- * @description KRİTİK YAPILANDIRMA REHBERİ
- * 1. Firebase Console > Proje Ayarları (Çark simgesi) > General > Your Apps yolunu izleyin.
- * 2. Buradaki firebaseConfig nesnesini kopyalayıp aşağıdaki MY_CUSTOM_CONFIG içine yapıştırın.
- * 3. Sol menüde Authentication yoksa "Build" menüsünü genişletin veya arama çubuğunu kullanın.
- * 4. Sign-in Method sekmesinden "Anonymous" özelliğini etkinleştirin.
+ * @description KRİTİK YAPILANDIRMA ALANI
+ * Firebase Console > Proje Ayarları > General > Your Apps altındaki nesneyi buraya yapıştırın.
  */
 const firebaseConfig = {
   apiKey: "AIzaSyCa_Rc0476-6E1La4J1XoopNU3bYzeJV1M",
@@ -26,13 +23,18 @@ const firebaseConfig = {
   measurementId: "G-E5KRT2E8B2"
 };
 
-// Firebase Servislerinin Başlatılması (Pattern Rule 1 & 3)
+// Firebase Servislerinin Başlatılması
 const getFirebase = () => {
   try {
-    const config = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : MY_CUSTOM_CONFIG;
+    const config = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : firebaseConfig;
     
-    // Geçerli bir config yoksa veya hala yer tutucular duruyorsa hata fırlatmak yerine null dön
-    if (!config.apiKey || config.apiKey.includes("SİZİN")) {
+    // Güvenlik Kontrolü: Eğer anahtar girilmemişse veya yer tutucu metin duruyorsa
+    const isUnconfigured = !config.apiKey || 
+                           config.apiKey === "" || 
+                           config.apiKey.includes("GELECEK") || 
+                           config.apiKey.includes("SİZİN");
+
+    if (isUnconfigured) {
       return { app: null, auth: null, db: null, isConfigured: false };
     }
 
@@ -44,7 +46,7 @@ const getFirebase = () => {
       isConfigured: true 
     };
   } catch (e) {
-    console.error("Firebase Initialization Error:", e);
+    console.error("Firebase başlatma hatası:", e);
     return { app: null, auth: null, db: null, isConfigured: false };
   }
 };
@@ -52,6 +54,7 @@ const getFirebase = () => {
 const { auth, db, isConfigured } = getFirebase();
 const appId = typeof __app_id !== 'undefined' ? __app_id : 'anil-cafe-v1-prod';
 
+// --- STATİK VERİ SETLERİ ---
 const CATEGORIES = [
   { id: 'sicak', name: 'Sıcak İçecekler', icon: <Coffee size={24} /> },
   { id: 'soguk', name: 'Soğuk İçecekler', icon: <CupSoda size={24} /> },
@@ -83,9 +86,9 @@ export default function App() {
   const [tables, setTables] = useState(INITIAL_TABLES);
   const [activeTableId, setActiveTableId] = useState(null);
   const [activeCategory, setActiveCategory] = useState('sicak');
-  const [connState, setConnState] = useState('checking'); // checking, unconfigured, auth-error, connected
+  const [connState, setConnState] = useState('checking'); 
 
-  // 1. Kimlik Doğrulama Katmanı (Rule 3)
+  // 1. Kimlik Doğrulama
   useEffect(() => {
     if (!isConfigured) {
       setConnState('unconfigured');
@@ -110,19 +113,15 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  // 2. Veri Senkronizasyonu (Rule 1 & Success/Error Callbacks)
+  // 2. Senkronizasyon
   useEffect(() => {
     if (!user || !db) return;
 
-    // Strict Path: /artifacts/{appId}/public/data/tables
     const tablesRef = collection(db, 'artifacts', appId, 'public', 'data', 'tables');
     
     const unsubscribe = onSnapshot(tablesRef, (snapshot) => {
-      if (snapshot.empty) {
-        setTables(INITIAL_TABLES);
-      } else {
+      if (!snapshot.empty) {
         const dbData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-        // Manuel eşleştirme (Rule 2)
         setTables(INITIAL_TABLES.map(t => {
           const match = dbData.find(d => d.id === t.id);
           return match || t;
@@ -130,7 +129,7 @@ export default function App() {
       }
       setConnState('connected');
     }, (err) => {
-      console.error("Firestore Permission Error:", err);
+      console.error("Firestore Error:", err);
       if (err.code === 'permission-denied') setConnState('permission-error');
     });
 
@@ -179,7 +178,7 @@ export default function App() {
 
   const calculateTotal = (orders) => orders.reduce((acc, curr) => acc + (curr.price * curr.quantity), 0);
 
-  // --- RENDERING LOGIC ---
+  // --- RENDER DÖNGÜSÜ ---
 
   if (connState === 'unconfigured') {
     return (
@@ -188,14 +187,12 @@ export default function App() {
           <div className="w-20 h-20 bg-amber-500/20 rounded-3xl flex items-center justify-center mx-auto mb-8 text-amber-500 border border-amber-500/30">
             <Key size={40} />
           </div>
-          <h1 className="text-3xl font-black mb-4 tracking-tight leading-tight">Konfigürasyon Gerekli</h1>
+          <h1 className="text-3xl font-black mb-4 tracking-tight">Konfigürasyon Gerekli</h1>
           <p className="text-slate-400 font-bold mb-8 leading-relaxed">
-            Lütfen <code className="bg-slate-950 px-2 py-1 rounded text-amber-400">App.jsx</code> dosyasındaki <code className="text-white">MY_CUSTOM_CONFIG</code> alanına kendi Firebase anahtarlarınızı girin.
+            Lütfen <code className="bg-slate-950 px-2 py-1 rounded text-amber-400">App.jsx</code> dosyasındaki <code className="text-white">firebaseConfig</code> alanına gerçek anahtarlarınızı yapıştırın.
           </p>
-          <div className="space-y-3">
-            <div className="bg-slate-950 p-4 rounded-2xl text-left text-sm font-mono border border-slate-700 overflow-x-auto">
-              apiKey: "AIzaSy..."
-            </div>
+          <div className="bg-slate-950 p-4 rounded-2xl text-left text-sm font-mono border border-slate-700">
+            apiKey: "AIzaSy..."
           </div>
         </div>
       </div>
@@ -213,10 +210,6 @@ export default function App() {
                 <span className="bg-emerald-50 text-emerald-600 px-4 py-1.5 rounded-full text-xs font-black flex items-center gap-2 border border-emerald-100 shadow-sm">
                   <Wifi size={14} /> BULUT SENKRONİZASYONU AKTİF
                 </span>
-              ) : connState === 'auth-error' ? (
-                <span className="bg-red-50 text-red-600 px-4 py-1.5 rounded-full text-xs font-black flex items-center gap-2 border border-red-100 animate-pulse">
-                  <AlertTriangle size={14} /> AUTH HATASI (ANONYMOUS LOGIN?)
-                </span>
               ) : (
                 <span className="bg-amber-50 text-amber-600 px-4 py-1.5 rounded-full text-xs font-black flex items-center gap-2 border border-amber-100">
                   <div className="w-2 h-2 bg-amber-400 rounded-full animate-ping" /> BAĞLANTI KURULUYOR...
@@ -225,13 +218,8 @@ export default function App() {
             </div>
           </div>
           <div className="bg-white px-6 py-4 rounded-3xl shadow-md border border-slate-100 flex items-center gap-4">
-            <div className="w-10 h-10 bg-indigo-50 rounded-2xl flex items-center justify-center text-indigo-600">
-              <User size={20} />
-            </div>
-            <div>
-              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Garson</p>
-              <p className="text-sm font-bold text-slate-700">Ahmet Yılmaz</p>
-            </div>
+            <User size={20} className="text-indigo-600" />
+            <span className="text-sm font-bold text-slate-700">Garson Modu</span>
           </div>
         </header>
 
@@ -244,9 +232,7 @@ export default function App() {
                 key={table.id} 
                 onClick={() => setActiveTableId(table.id)} 
                 className={`flex flex-col p-8 rounded-[2.5rem] transition-all border-4 text-left h-52 shadow-sm relative group active:scale-95 ${
-                  isOccupied 
-                  ? 'bg-white border-emerald-500 ring-8 ring-emerald-50' 
-                  : 'bg-white border-slate-100 hover:border-slate-300'
+                  isOccupied ? 'bg-white border-emerald-500 ring-8 ring-emerald-50' : 'bg-white border-slate-100 hover:border-slate-300'
                 }`}
               >
                 <div className="flex justify-between w-full mb-auto items-center">
@@ -272,29 +258,19 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-100 flex flex-col lg:flex-row font-sans overflow-hidden text-slate-900">
-      {/* Ürün Seçimi */}
+    <div className="min-h-screen bg-slate-100 flex flex-col lg:flex-row font-sans overflow-hidden">
       <div className="flex-1 flex flex-col h-[55vh] lg:h-screen">
         <header className="bg-white p-6 flex items-center gap-6 shadow-sm border-b border-slate-200">
           <button onClick={() => setActiveTableId(null)} className="p-4 bg-slate-50 rounded-2xl hover:bg-slate-200 transition text-slate-400 hover:text-slate-900">
             <ArrowLeft size={28} />
           </button>
-          <div>
-            <h2 className="text-3xl font-black text-slate-800 tracking-tight leading-none">{activeTable.name}</h2>
-            <p className="text-slate-400 font-bold text-xs mt-2 uppercase tracking-widest">Sipariş Kaydı</p>
-          </div>
+          <h2 className="text-3xl font-black text-slate-800 tracking-tight">{activeTable.name}</h2>
         </header>
         
         <div className="bg-white border-b border-slate-200 p-4 overflow-x-auto scrollbar-hide">
           <div className="flex gap-3">
             {CATEGORIES.map(cat => (
-              <button 
-                key={cat.id} 
-                onClick={() => setActiveCategory(cat.id)} 
-                className={`flex items-center gap-3 px-10 py-5 rounded-3xl font-black transition whitespace-nowrap shadow-sm ${
-                  activeCategory === cat.id ? 'bg-slate-900 text-white shadow-xl scale-105' : 'bg-slate-50 text-slate-500 hover:bg-slate-200'
-                }`}
-              >
+              <button key={cat.id} onClick={() => setActiveCategory(cat.id)} className={`flex items-center gap-3 px-10 py-5 rounded-3xl font-black transition whitespace-nowrap shadow-sm ${activeCategory === cat.id ? 'bg-slate-900 text-white shadow-xl scale-105' : 'bg-slate-50 text-slate-500 hover:bg-slate-200'}`}>
                 {cat.icon} {cat.name}
               </button>
             ))}
@@ -304,36 +280,24 @@ export default function App() {
         <div className="flex-1 overflow-y-auto p-8 bg-slate-50">
           <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-6">
             {filteredProducts.map(product => (
-              <button 
-                key={product.id} 
-                onClick={() => handleAddProduct(product)} 
-                className={`${product.color} p-8 rounded-[2.5rem] flex flex-col items-center justify-center text-center shadow-sm hover:shadow-xl hover:scale-[1.03] transition-all active:scale-95 border border-black/5 relative overflow-hidden`}
-              >
-                <div className="absolute top-0 right-0 p-4 opacity-10">
-                  <Utensils size={40} />
-                </div>
+              <button key={product.id} onClick={() => handleAddProduct(product)} className={`${product.color} p-8 rounded-[2.5rem] flex flex-col items-center justify-center text-center shadow-sm hover:shadow-xl transition-all border border-black/5`}>
                 <span className="font-black text-slate-800 mb-4 text-xl">{product.name}</span>
-                <span className="text-slate-900 font-black bg-white/80 px-8 py-3 rounded-2xl text-lg shadow-sm">₺{product.price}</span>
+                <span className="text-slate-900 font-black bg-white/90 px-8 py-3 rounded-2xl text-lg shadow-sm">₺{product.price}</span>
               </button>
             ))}
           </div>
         </div>
       </div>
 
-      {/* Adisyon Paneli */}
       <div className="w-full lg:w-[450px] bg-white flex flex-col h-[45vh] lg:h-screen border-l border-slate-200 shadow-2xl relative z-20">
         <div className="p-8 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
-          <h3 className="font-black text-slate-800 flex items-center gap-3 text-2xl tracking-tight">
-            <Receipt size={28} className="text-indigo-600" /> ADİSYON
-          </h3>
-          <span className="bg-slate-900 text-white px-5 py-2 rounded-2xl text-xs font-black shadow-lg">
-            {activeTable.orders.length} KALEM
-          </span>
+          <h3 className="font-black text-slate-800 flex items-center gap-3 text-2xl tracking-tight"><Receipt size={28} className="text-indigo-600" /> ADİSYON</h3>
+          <span className="bg-slate-900 text-white px-5 py-2 rounded-2xl text-xs font-black shadow-lg">{activeTable.orders.length} KALEM</span>
         </div>
 
         <div className="flex-1 overflow-y-auto p-6 space-y-4">
           {activeTable.orders.map(order => (
-            <div key={order.productId} className="flex flex-col p-6 bg-slate-50 rounded-[2rem] border border-slate-100 shadow-sm group">
+            <div key={order.productId} className="flex flex-col p-6 bg-slate-50 rounded-[2rem] border border-slate-100 shadow-sm">
               <div className="flex justify-between font-black text-slate-800 mb-4 text-xl">
                 <span>{order.name}</span>
                 <span className="text-indigo-600">₺{(order.price * order.quantity).toFixed(2)}</span>
@@ -341,45 +305,28 @@ export default function App() {
               <div className="flex items-center justify-between">
                 <span className="text-xs text-slate-400 font-black tracking-widest">₺{order.price} x {order.quantity}</span>
                 <div className="flex items-center gap-3 bg-white rounded-2xl p-2 shadow-inner border border-slate-200">
-                  <button onClick={() => handleRemoveProduct(order.productId)} className="p-3 text-red-500 hover:bg-red-50 rounded-xl transition">
-                    {order.quantity === 1 ? <Trash2 size={20} /> : <Minus size={20} />}
-                  </button>
+                  <button onClick={() => handleRemoveProduct(order.productId)} className="p-3 text-red-500 hover:bg-red-50 rounded-xl transition">{order.quantity === 1 ? <Trash2 size={20} /> : <Minus size={20} />}</button>
                   <span className="w-8 text-center font-black text-slate-800 text-xl">{order.quantity}</span>
-                  <button onClick={() => handleAddProduct({id: order.productId, name: order.name, price: order.price})} className="p-3 text-emerald-600 hover:bg-emerald-50 rounded-xl transition">
-                    <Plus size={20} />
-                  </button>
+                  <button onClick={() => handleAddProduct({id: order.productId, name: order.name, price: order.price})} className="p-3 text-emerald-600 hover:bg-emerald-50 rounded-xl transition"><Plus size={20} /></button>
                 </div>
               </div>
             </div>
           ))}
-          {activeTable.orders.length === 0 && (
-            <div className="h-full flex flex-col items-center justify-center text-slate-200 py-10">
-              <Utensils size={80} className="opacity-10 mb-6" />
-              <p className="font-black uppercase tracking-[0.4em] text-sm">Sipariş Bekleniyor</p>
-            </div>
-          )}
         </div>
 
-        <div className="p-10 border-t border-slate-200 bg-white shadow-[0_-10px_40px_-20px_rgba(0,0,0,0.1)]">
+        <div className="p-10 border-t border-slate-200 bg-white">
           <div className="flex justify-between items-end mb-8">
             <span className="text-slate-400 font-black text-xs uppercase tracking-[0.3em]">Genel Toplam</span>
             <span className="text-6xl font-black text-slate-900 tracking-tighter">₺{calculateTotal(activeTable.orders).toFixed(2)}</span>
           </div>
           <div className="flex gap-4">
-            <button className="flex-1 bg-slate-900 text-white py-6 rounded-[2rem] font-black text-xs tracking-[0.2em] hover:bg-black transition shadow-xl uppercase">MUTFAK</button>
-            <button 
-              onClick={() => { if(window.confirm('Ödeme alındı mı?')) { handleRemoveProduct(null); /* Reset placeholder */ } }} 
-              disabled={activeTable.orders.length === 0} 
-              className={`flex-1 py-6 rounded-[2rem] font-black text-xs tracking-[0.2em] transition shadow-xl flex items-center justify-center gap-3 uppercase ${
-                activeTable.orders.length === 0 ? 'bg-slate-100 text-slate-300' : 'bg-emerald-600 text-white hover:bg-emerald-700'
-              }`}
-            >
+            <button className="flex-1 bg-slate-900 text-white py-6 rounded-[2rem] font-black text-xs tracking-[0.2em] shadow-xl uppercase">MUTFAK</button>
+            <button onClick={() => { if(window.confirm('Ödeme alındı mı?')) { handleRemoveProduct(null); } }} disabled={activeTable.orders.length === 0} className={`flex-1 py-6 rounded-[2rem] font-black text-xs tracking-[0.2em] transition shadow-xl flex items-center justify-center gap-3 uppercase ${activeTable.orders.length === 0 ? 'bg-slate-100 text-slate-300' : 'bg-emerald-600 text-white hover:bg-emerald-700'}`}>
               <CheckCircle size={24} /> ÖDEME AL
             </button>
           </div>
         </div>
       </div>
-      
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap');
         body { font-family: 'Inter', sans-serif; -webkit-tap-highlight-color: transparent; }
