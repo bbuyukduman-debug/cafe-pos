@@ -3,17 +3,15 @@ import {
   Coffee, Pizza, Cake, CupSoda, 
   Plus, Minus, Trash2, ArrowLeft, 
   CheckCircle, User, Clock, Utensils,
-  Receipt, Download
+  Receipt, Download, Wifi, WifiOff
 } from 'lucide-react';
 import { initializeApp, getApps, getApp } from 'firebase/app';
 import { getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
-import { getFirestore, collection, doc, setDoc, onSnapshot } from 'firebase/firestore';
+import { getFirestore, collection, doc, setDoc, onSnapshot, getDoc } from 'firebase/firestore';
 
-// NOT: Önizleme ortamında 'Could not resolve "./index.css"' hatasını önlemek için 
-// dış CSS import satırı kaldırıldı. Stiller Tailwind sınıfları ve alttaki <style> 
-// bloğu üzerinden yönetilmektedir.
-
-// --- GÜVENLİ FİREBASE YAPILANDIRMASI ---
+// --- FİREBASE YAPILANDIRMASI ---
+// ÖNEMLİ: Eğer kendi Firebase projenizi kullanıyorsanız, Firebase Konsolu > Rules kısmından 
+// okuma/yazma izinlerini herkese açtığınızdan (allow read, write: if true;) emin olun.
 const MY_CUSTOM_CONFIG = {
   apiKey: "AIzaSyCa_Rc0476-6E1La4J1XoopNU3bYzeJV1M",
   authDomain: "my-cafe-f8ee7.firebaseapp.com",
@@ -23,33 +21,14 @@ const MY_CUSTOM_CONFIG = {
   appId: "1:408851040899:web:a9378e8345356cbf3129b6"
 };
 
-const getFirebaseInstance = () => {
-  try {
-    let config = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
-    
-    if (!config || !config.apiKey || config.apiKey === "") {
-      config = MY_CUSTOM_CONFIG;
-    }
+// Ortam değişkenlerini veya özel yapılandırmayı kullan
+const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : MY_CUSTOM_CONFIG;
+const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
 
-    const isPlaceholder = config.apiKey.includes("SİZİN_API") || config.apiKey === "";
-    
-    if (isPlaceholder) {
-      console.warn("Firebase yapılandırması eksik. Yerel modda başlatılıyor.");
-      return { app: null, auth: null, db: null };
-    }
-
-    const app = getApps().length > 0 ? getApp() : initializeApp(config);
-    const auth = getAuth(app);
-    const db = getFirestore(app);
-    return { app, auth, db };
-  } catch (e) {
-    console.error("Firebase başlatma hatası:", e);
-    return { app: null, auth: null, db: null };
-  }
-};
-
-const { auth, db } = getFirebaseInstance();
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+// Senkronizasyon için appId (Zorunlu yol yapısı için gereklidir)
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'anil-cafe-pos-v1';
 
 // --- VERİ SETLERİ ---
 const CATEGORIES = [
@@ -83,10 +62,11 @@ export default function App() {
   const [tables, setTables] = useState(INITIAL_TABLES);
   const [activeTableId, setActiveTableId] = useState(null);
   const [activeCategory, setActiveCategory] = useState('sicak');
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [authReady, setAuthReady] = useState(false);
 
-  // Kimlik Doğrulama
+  // 1. Kimlik Doğrulama Süreci (Kritik: Firestore'dan önce tamamlanmalı)
   useEffect(() => {
-    if (!auth) return;
     const initAuth = async () => {
       try {
         if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
@@ -94,66 +74,96 @@ export default function App() {
         } else {
           await signInAnonymously(auth);
         }
-      } catch (error) { 
-        console.error("Firebase Auth hatası:", error); 
+        console.log("Kimlik doğrulama başarılı.");
+      } catch (error) {
+        console.error("Kimlik doğrulama hatası:", error);
+      } finally {
+        setAuthReady(true);
       }
     };
+
     initAuth();
-    const unsubscribe = onAuthStateChanged(auth, setUser);
+    const unsubscribe = onAuthStateChanged(auth, (u) => {
+      setUser(u);
+    });
     return () => unsubscribe();
   }, []);
 
-  // Gerçek Zamanlı Veri Senkronizasyonu
+  // 2. Veritabanı Dinleme (Sadece kullanıcı oturum açtıktan sonra başlar)
   useEffect(() => {
-    if (!db || !user) return;
+    // pattern rule 3: Auth tamamlanmadan ve user nesnesi oluşmadan sorgu yapma
+    if (!authReady || !user) return;
+
+    // pattern rule 1: /artifacts/{appId}/public/data/{collectionName} yolunu kullan
+    const tablesCollection = collection(db, 'artifacts', appId, 'public', 'data', 'tables');
     
-    const tablesRef = collection(db, 'artifacts', appId, 'public', 'data', 'tables');
-    
-    const unsubscribe = onSnapshot(tablesRef, (snapshot) => {
-      if (snapshot.empty) {
-        setTables(INITIAL_TABLES);
-        return;
+    setIsSyncing(true);
+    const unsubscribe = onSnapshot(tablesCollection, 
+      (snapshot) => {
+        if (snapshot.empty) {
+          setTables(INITIAL_TABLES);
+        } else {
+          const dbData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+          // pattern rule 2: Manuel sıralama ve eşleştirme (JS tarafında)
+          setTables(INITIAL_TABLES.map(initialTable => {
+            const match = dbData.find(d => d.id === initialTable.id);
+            return match || initialTable;
+          }));
+        }
+        setIsSyncing(false);
+      }, 
+      (error) => {
+        console.error("Firestore Dinleme Hatası:", error);
+        setIsSyncing(false);
+        // Hata durumunda kullanıcıyı bilgilendirmek için konsola detay yazdır
+        if (error.code === 'permission-denied') {
+          console.error("YETERSİZ YETKİ: Lütfen Firebase Console üzerinden Rules (Kurallar) kısmını kontrol edin.");
+        }
       }
-      const dbTables = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setTables(INITIAL_TABLES.map(initialTable => {
-        const dbTable = dbTables.find(t => t.id === initialTable.id);
-        return dbTable || initialTable;
-      }));
-    }, (error) => { 
-      console.error("Firestore veri dinleme hatası:", error); 
-    });
-    
+    );
+
     return () => unsubscribe();
-  }, [user]);
+  }, [user, authReady]);
 
   const activeTable = useMemo(() => tables.find(t => t.id === activeTableId), [tables, activeTableId]);
   const filteredProducts = useMemo(() => PRODUCTS.filter(p => p.category === activeCategory), [activeCategory]);
 
   const handleAddProduct = async (product) => {
+    if (!user) return;
     const currentTable = tables.find(t => t.id === activeTableId);
     if (!currentTable) return;
 
-    let newOrders = [...currentTable.orders];
-    const idx = newOrders.findIndex(o => o.productId === product.id);
-    
-    if (idx >= 0) {
-      newOrders[idx] = { ...newOrders[idx], quantity: newOrders[idx].quantity + 1 };
+    const newOrders = [...currentTable.orders];
+    const existingIdx = newOrders.findIndex(o => o.productId === product.id);
+
+    if (existingIdx >= 0) {
+      newOrders[existingIdx] = { ...newOrders[existingIdx], quantity: newOrders[existingIdx].quantity + 1 };
     } else {
-      newOrders.push({ 
-        productId: product.id, name: product.name, price: product.price, 
-        quantity: 1, time: new Date().toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' }) 
+      newOrders.push({
+        productId: product.id,
+        name: product.name,
+        price: product.price,
+        quantity: 1,
+        time: new Date().toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })
       });
     }
 
-    if (db && user) {
-      const tableRef = doc(db, 'artifacts', appId, 'public', 'data', 'tables', activeTableId);
-      await setDoc(tableRef, { ...currentTable, orders: newOrders, status: 'occupied' });
-    } else {
-      setTables(prev => prev.map(t => t.id === activeTableId ? { ...t, orders: newOrders, status: 'occupied' } : t));
+    const tableRef = doc(db, 'artifacts', appId, 'public', 'data', 'tables', activeTableId);
+    try {
+      await setDoc(tableRef, {
+        id: activeTableId,
+        name: currentTable.name,
+        orders: newOrders,
+        status: 'occupied',
+        updatedAt: new Date().getTime()
+      });
+    } catch (err) {
+      console.error("Ürün ekleme hatası:", err);
     }
   };
 
   const handleRemoveProduct = async (productId) => {
+    if (!user) return;
     const currentTable = tables.find(t => t.id === activeTableId);
     if (!currentTable) return;
 
@@ -167,46 +177,74 @@ export default function App() {
       newOrders.splice(idx, 1);
     }
 
-    const status = newOrders.length === 0 ? 'empty' : 'occupied';
+    const newStatus = newOrders.length === 0 ? 'empty' : 'occupied';
+    const tableRef = doc(db, 'artifacts', appId, 'public', 'data', 'tables', activeTableId);
     
-    if (db && user) {
-      const tableRef = doc(db, 'artifacts', appId, 'public', 'data', 'tables', activeTableId);
-      await setDoc(tableRef, { ...currentTable, orders: newOrders, status });
-    } else {
-      setTables(prev => prev.map(t => t.id === activeTableId ? { ...t, orders: newOrders, status } : t));
+    try {
+      await setDoc(tableRef, {
+        id: activeTableId,
+        name: currentTable.name,
+        orders: newOrders,
+        status: newStatus,
+        updatedAt: new Date().getTime()
+      });
+    } catch (err) {
+      console.error("Ürün silme hatası:", err);
     }
   };
 
   const handleCheckout = async () => {
-    if (!activeTable) return;
-    if (window.confirm(`${activeTable.name} hesabı kapatılacak ve veriler sıfırlanacak?`)) {
-      if (db && user) {
-        const tableRef = doc(db, 'artifacts', appId, 'public', 'data', 'tables', activeTableId);
-        await setDoc(tableRef, { id: activeTableId, name: activeTable.name, orders: [], status: 'empty' });
-      } else {
-        setTables(prev => prev.map(t => t.id === activeTableId ? { ...t, orders: [], status: 'empty' } : t));
+    if (!user || !activeTable) return;
+    if (window.confirm(`${activeTable.name} hesabı kapatılacak ve masa boşaltılacak. Onaylıyor musunuz?`)) {
+      const tableRef = doc(db, 'artifacts', appId, 'public', 'data', 'tables', activeTableId);
+      try {
+        await setDoc(tableRef, {
+          id: activeTableId,
+          name: activeTable.name,
+          orders: [],
+          status: 'empty',
+          updatedAt: new Date().getTime()
+        });
+        setActiveTableId(null);
+      } catch (err) {
+        console.error("Tahsilat hatası:", err);
       }
-      setActiveTableId(null);
     }
   };
 
-  const calculateTotal = (orders) => orders.reduce((total, order) => total + (order.price * order.quantity), 0);
+  const calculateTotal = (orders) => orders.reduce((acc, curr) => acc + (curr.price * curr.quantity), 0);
+
+  // --- ARAYÜZ BİLEŞENLERİ ---
 
   if (!activeTableId) {
     return (
       <div className="min-h-screen bg-slate-50 p-4 md:p-8 font-sans text-slate-900">
         <header className="mb-10 flex items-center justify-between">
           <div>
-            <h1 className="text-3xl md:text-5xl font-black text-slate-800 tracking-tight">Salon Yönetimi</h1>
-            <p className="text-slate-500 font-bold mt-1">
-              {!db ? "⚠️ Yerel Mod (Veritabanı Bağlı Değil)" : "✅ Bulut Senkronizasyonu Aktif"}
-            </p>
+            <h1 className="text-3xl md:text-5xl font-black text-slate-800 tracking-tight">Anıl Cafe POS</h1>
+            <div className="flex items-center gap-2 mt-2">
+              {user ? (
+                <span className="flex items-center gap-1.5 text-emerald-600 font-bold text-sm bg-emerald-50 px-3 py-1 rounded-full border border-emerald-100">
+                  <Wifi size={14} /> Bulut Senkronizasyonu Aktif
+                </span>
+              ) : (
+                <span className="flex items-center gap-1.5 text-amber-600 font-bold text-sm bg-amber-50 px-3 py-1 rounded-full border border-amber-100">
+                  <WifiOff size={14} /> Bağlantı Kuruluyor...
+                </span>
+              )}
+            </div>
           </div>
           <div className="flex items-center gap-3 bg-white px-6 py-3 rounded-full shadow-md border border-slate-200">
             <User size={22} className="text-indigo-600" />
-            <span className="text-sm font-black text-slate-700">Garson Modu</span>
+            <span className="text-sm font-black text-slate-700">Garson: Ahmet</span>
           </div>
         </header>
+
+        {isSyncing && (
+          <div className="mb-6 text-center text-indigo-500 font-bold animate-pulse text-xs tracking-widest uppercase">
+            Veriler Güncelleniyor...
+          </div>
+        )}
 
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6 md:gap-8">
           {tables.map(table => {
@@ -234,7 +272,7 @@ export default function App() {
                     <div className="font-black text-emerald-600 text-4xl tracking-tighter">₺{total.toFixed(2)}</div>
                   </div>
                 ) : (
-                  <div className="text-xs font-black uppercase text-slate-200 tracking-[0.3em] mt-auto">Adisyon Aç</div>
+                  <div className="text-xs font-black uppercase text-slate-200 tracking-[0.3em] mt-auto">Masa Boş</div>
                 )}
               </button>
             );
@@ -246,14 +284,18 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-100 flex flex-col lg:flex-row font-sans overflow-hidden text-slate-900">
+      {/* Sol Panel: Menü */}
       <div className="flex-1 flex flex-col h-[55vh] lg:h-screen">
         <header className="bg-white p-6 flex items-center gap-6 shadow-sm border-b border-slate-200">
-          <button onClick={() => setActiveTableId(null)} className="p-4 bg-slate-100 rounded-3xl hover:bg-slate-200 transition-colors shadow-inner">
+          <button 
+            onClick={() => setActiveTableId(null)} 
+            className="p-4 bg-slate-100 rounded-3xl hover:bg-slate-200 transition-colors shadow-inner"
+          >
             <ArrowLeft size={28} />
           </button>
           <div>
             <h2 className="text-3xl font-black text-slate-800 tracking-tight leading-none">{activeTable?.name}</h2>
-            <p className="text-slate-400 font-bold text-sm mt-1 uppercase tracking-widest">Ürün Listesi</p>
+            <p className="text-slate-400 font-bold text-sm mt-1 uppercase tracking-widest">Sipariş Kaydı</p>
           </div>
         </header>
 
@@ -289,6 +331,7 @@ export default function App() {
         </div>
       </div>
 
+      {/* Sağ Panel: Adisyon */}
       <div className="w-full lg:w-[500px] bg-white flex flex-col h-[45vh] lg:h-screen border-l-4 border-slate-200 shadow-2xl relative z-30">
         <div className="p-8 bg-slate-50 border-b-2 border-slate-200 flex items-center justify-between">
           <h3 className="font-black text-slate-800 flex items-center gap-4 text-2xl">
@@ -301,7 +344,7 @@ export default function App() {
 
         <div className="flex-1 overflow-y-auto p-6 space-y-5">
           {activeTable?.orders.map(order => (
-            <div key={order.productId} className="flex flex-col p-6 bg-slate-50 rounded-[2rem] border-2 border-slate-100 shadow-sm transition-transform hover:scale-[1.01]">
+            <div key={order.productId} className="flex flex-col p-6 bg-slate-50 rounded-[2rem] border-2 border-slate-100 shadow-sm">
               <div className="flex justify-between font-black text-slate-800 mb-4 text-xl">
                 <span>{order.name}</span>
                 <span className="text-indigo-600">₺{(order.price * order.quantity).toFixed(2)}</span>
@@ -309,11 +352,17 @@ export default function App() {
               <div className="flex items-center justify-between">
                 <span className="text-sm text-slate-400 font-black tracking-widest">₺{order.price} x {order.quantity}</span>
                 <div className="flex items-center gap-4 bg-white rounded-2xl p-2 shadow-inner border border-slate-200">
-                  <button onClick={() => handleRemoveProduct(order.productId)} className="p-3 text-red-500 hover:bg-red-50 rounded-2xl transition-colors">
+                  <button 
+                    onClick={() => handleRemoveProduct(order.productId)} 
+                    className="p-3 text-red-500 hover:bg-red-50 rounded-2xl transition-colors"
+                  >
                     {order.quantity === 1 ? <Trash2 size={24} /> : <Minus size={24} />}
                   </button>
                   <span className="w-10 text-center font-black text-slate-800 text-2xl">{order.quantity}</span>
-                  <button onClick={() => handleAddProduct({id: order.productId, name: order.name, price: order.price})} className="p-3 text-emerald-600 hover:bg-emerald-50 rounded-2xl transition-colors">
+                  <button 
+                    onClick={() => handleAddProduct({id: order.productId, name: order.name, price: order.price})} 
+                    className="p-3 text-emerald-600 hover:bg-emerald-50 rounded-2xl transition-colors"
+                  >
                     <Plus size={24} />
                   </button>
                 </div>
@@ -328,13 +377,13 @@ export default function App() {
           )}
         </div>
 
-        <div className="p-10 border-t-4 border-slate-100 bg-white shadow-[0_-10px_40px_-15px_rgba(0,0,0,0.1)]">
+        <div className="p-10 border-t-4 border-slate-100 bg-white">
           <div className="flex justify-between items-end mb-10">
             <span className="text-slate-400 font-black text-sm uppercase tracking-[0.3em]">Genel Toplam</span>
             <span className="text-6xl font-black text-slate-900 tracking-tighter">₺{calculateTotal(activeTable?.orders || []).toFixed(2)}</span>
           </div>
           <div className="grid grid-cols-2 gap-6">
-            <button className="bg-slate-900 text-white py-6 rounded-[2rem] font-black text-xs tracking-[0.2em] hover:bg-black transition-all active:scale-95 shadow-2xl uppercase">MUTFAĞA İLET</button>
+            <button className="bg-slate-900 text-white py-6 rounded-[2rem] font-black text-xs tracking-[0.2em] hover:bg-black transition-all active:scale-95 shadow-2xl uppercase">MUTFAK</button>
             <button 
               onClick={handleCheckout} 
               disabled={!activeTable?.orders || activeTable.orders.length === 0} 
@@ -342,7 +391,7 @@ export default function App() {
                 !activeTable?.orders || activeTable.orders.length === 0 ? 'bg-slate-100 text-slate-300' : 'bg-emerald-600 text-white hover:bg-emerald-700'
               }`}
             >
-              <CheckCircle size={24} /> ÖDEME AL
+              <CheckCircle size={24} /> TAHSİLAT
             </button>
           </div>
         </div>
@@ -350,12 +399,7 @@ export default function App() {
       
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap');
-        body { 
-          font-family: 'Inter', sans-serif; 
-          -webkit-tap-highlight-color: transparent; 
-          background-color: #f8fafc;
-          overflow: hidden;
-        }
+        body { font-family: 'Inter', sans-serif; -webkit-tap-highlight-color: transparent; background-color: #f8fafc; overflow: hidden; }
         .scrollbar-hide::-webkit-scrollbar { display: none; }
         .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
       `}</style>
