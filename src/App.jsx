@@ -9,8 +9,11 @@ import { initializeApp, getApps, getApp } from 'firebase/app';
 import { getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, collection, doc, setDoc, onSnapshot } from 'firebase/firestore';
 
-// --- KRİTİK YAPILANDIRMA: Kendi Firebase bilgilerinizi buraya giriniz ---
-// Firebase Konsolu (console.firebase.google.com) > Proje Ayarları > Web App kısmından bu bilgileri alabilirsiniz.
+// NOT: Önizleme ortamında 'Could not resolve "./index.css"' hatasını önlemek için 
+// dış CSS import satırı kaldırıldı. Stiller Tailwind sınıfları ve alttaki <style> 
+// bloğu üzerinden yönetilmektedir.
+
+// --- GÜVENLİ FİREBASE YAPILANDIRMASI ---
 const MY_CUSTOM_CONFIG = {
   apiKey: "AIzaSyCa_Rc0476-6E1La4J1XoopNU3bYzeJV1M",
   authDomain: "my-cafe-f8ee7.firebaseapp.com",
@@ -20,20 +23,18 @@ const MY_CUSTOM_CONFIG = {
   appId: "1:408851040899:web:a9378e8345356cbf3129b6"
 };
 
-// --- GÜVENLİ FİREBASE BAŞLATMA PROTOKOLÜ ---
 const getFirebaseInstance = () => {
   try {
-    // Önce sistem tarafından sağlanan (eğer varsa) yapılandırmayı kontrol et
     let config = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
     
-    // Eğer sistem yapılandırması yoksa veya geçersizse, yukarıdaki manuel yapılandırmayı kullan
     if (!config || !config.apiKey || config.apiKey === "") {
       config = MY_CUSTOM_CONFIG;
     }
 
-    // Hala geçerli bir API Key yoksa veya "BURAYA" kelimesini içeriyorsa yerel modda kal
-    if (!config || !config.apiKey || config.apiKey.includes("BURAYA")) {
-      console.warn("Firebase yapılandırması eksik. Uygulama yerel modda çalışıyor.");
+    const isPlaceholder = config.apiKey.includes("SİZİN_API") || config.apiKey === "";
+    
+    if (isPlaceholder) {
+      console.warn("Firebase yapılandırması eksik. Yerel modda başlatılıyor.");
       return { app: null, auth: null, db: null };
     }
 
@@ -83,7 +84,7 @@ export default function App() {
   const [activeTableId, setActiveTableId] = useState(null);
   const [activeCategory, setActiveCategory] = useState('sicak');
 
-  // Kimlik Doğrulama Dinleyicisi
+  // Kimlik Doğrulama
   useEffect(() => {
     if (!auth) return;
     const initAuth = async () => {
@@ -94,7 +95,7 @@ export default function App() {
           await signInAnonymously(auth);
         }
       } catch (error) { 
-        console.error("Giriş yapılamadı:", error); 
+        console.error("Firebase Auth hatası:", error); 
       }
     };
     initAuth();
@@ -102,10 +103,12 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  // Veri Senkronizasyonu
+  // Gerçek Zamanlı Veri Senkronizasyonu
   useEffect(() => {
     if (!db || !user) return;
+    
     const tablesRef = collection(db, 'artifacts', appId, 'public', 'data', 'tables');
+    
     const unsubscribe = onSnapshot(tablesRef, (snapshot) => {
       if (snapshot.empty) {
         setTables(INITIAL_TABLES);
@@ -117,8 +120,9 @@ export default function App() {
         return dbTable || initialTable;
       }));
     }, (error) => { 
-      console.error("Veri takibi hatası:", error); 
+      console.error("Firestore veri dinleme hatası:", error); 
     });
+    
     return () => unsubscribe();
   }, [user]);
 
@@ -136,11 +140,8 @@ export default function App() {
       newOrders[idx] = { ...newOrders[idx], quantity: newOrders[idx].quantity + 1 };
     } else {
       newOrders.push({ 
-        productId: product.id, 
-        name: product.name, 
-        price: product.price, 
-        quantity: 1, 
-        time: new Date().toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' }) 
+        productId: product.id, name: product.name, price: product.price, 
+        quantity: 1, time: new Date().toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' }) 
       });
     }
 
@@ -178,7 +179,7 @@ export default function App() {
 
   const handleCheckout = async () => {
     if (!activeTable) return;
-    if (window.confirm(`${activeTable.name} hesabı kapatılacak?`)) {
+    if (window.confirm(`${activeTable.name} hesabı kapatılacak ve veriler sıfırlanacak?`)) {
       if (db && user) {
         const tableRef = doc(db, 'artifacts', appId, 'public', 'data', 'tables', activeTableId);
         await setDoc(tableRef, { id: activeTableId, name: activeTable.name, orders: [], status: 'empty' });
@@ -198,12 +199,12 @@ export default function App() {
           <div>
             <h1 className="text-3xl md:text-5xl font-black text-slate-800 tracking-tight">Salon Yönetimi</h1>
             <p className="text-slate-500 font-bold mt-1">
-              {!db ? "⚠️ Yerel Mod (Bulut Bağlantısı Yok)" : "✅ Bulut Senkronizasyonu Aktif"}
+              {!db ? "⚠️ Yerel Mod (Veritabanı Bağlı Değil)" : "✅ Bulut Senkronizasyonu Aktif"}
             </p>
           </div>
           <div className="flex items-center gap-3 bg-white px-6 py-3 rounded-full shadow-md border border-slate-200">
             <User size={22} className="text-indigo-600" />
-            <span className="text-sm font-black text-slate-700">Garson: Ahmet</span>
+            <span className="text-sm font-black text-slate-700">Garson Modu</span>
           </div>
         </header>
 
@@ -252,7 +253,7 @@ export default function App() {
           </button>
           <div>
             <h2 className="text-3xl font-black text-slate-800 tracking-tight leading-none">{activeTable?.name}</h2>
-            <p className="text-slate-400 font-bold text-sm mt-1 uppercase tracking-widest">Sipariş Kaydı</p>
+            <p className="text-slate-400 font-bold text-sm mt-1 uppercase tracking-widest">Ürün Listesi</p>
           </div>
         </header>
 
@@ -357,7 +358,6 @@ export default function App() {
         }
         .scrollbar-hide::-webkit-scrollbar { display: none; }
         .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
-        button:disabled { cursor: not-allowed; }
       `}</style>
     </div>
   );
